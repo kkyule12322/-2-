@@ -1,0 +1,16 @@
+# 编译产物
+*.exe
+*.o
+*.obj
+
+# 运行时生成
+_instances/
+*.ini
+*.lock
+*.lock2
+*.lock3
+*.lock4
+*.lock5
+*.lock6
+*.lock7
+*.lock8
