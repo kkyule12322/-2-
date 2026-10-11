@@ -297,10 +297,7 @@ static void FitFrame(BOOL reposition)
     SetWindowPos(g_frame, NULL, x, y,
                  need.right - need.left, need.bottom - need.top,
                  SWP_NOZORDER);
-    RECT newF; GetWindowRect(g_frame, &newF);
-    if (newF.top != oldF.top)
-        LogF(L"[位置] 容器 y: %d → %d（FitFrame reposition=%d，当时游戏 y=%d）",
-             oldF.top, newF.top, reposition, r.top);
+    (void)oldF;
 }
 // 收起：游戏放回原位，页签保留（绿→黄，仍绑定 pid 可再次收编）
 static void ReleaseSlot(int slot, BOOL keepBinding)
@@ -468,16 +465,9 @@ static void PinLoop(void)
     POINT p = GameTarget();
     RECT r;
     GetWindowRect(t->hwnd, &r);
-    if (r.left != p.x || r.top != p.y) {
-        // 上一次钉扎后游戏又被挪动了 → 说明有外部推手（AWT 缓存坐标回拉）
-        static int s_lastMover = INT_MIN;
-        if (r.top != s_lastMover) {
-            s_lastMover = r.top;
-            LogF(L"[位置] 游戏被外部挪动：y=%d（目标 y=%d），钉回。", r.top, p.y);
-        }
+    if (r.left != p.x || r.top != p.y)
         SetWindowPos(t->hwnd, NULL, p.x, p.y, 0, 0,
                      SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-    }
     if (GetWindow(g_frame, GW_HWNDPREV) != t->hwnd)
         SetWindowPos(g_frame, t->hwnd, 0, 0, 0, 0,
                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
