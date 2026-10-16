@@ -117,6 +117,18 @@ static void LoadConfig(void)
         swprintf(old, MAX_PATH, L"%s贴靠实验.ini", base);
         GetPrivateProfileStringW(L"config", L"game_dir", L"", buf, MAX_PATH, old);
     }
+    if (buf[0]) {
+        // 自愈：ini 里的目录在本机不存在游戏 exe，而 exe 自己所在目录有 → 改用 exe 所在目录
+        // （典型场景：exe 连同旧 ini 一起拷到新电脑，game_dir 还是旧机器的路径）
+        WCHAR chk[MAX_PATH], self[MAX_PATH];
+        swprintf(chk, MAX_PATH, L"%s\\%s", buf, EXE_NAME);
+        swprintf(self, MAX_PATH, L"%s%s", base, EXE_NAME);
+        if (GetFileAttributesW(chk) == INVALID_FILE_ATTRIBUTES &&
+            GetFileAttributesW(self) != INVALID_FILE_ATTRIBUTES) {
+            LogF(L"[配置] ini 的游戏目录已失效（%s），改用 exe 所在目录。", buf);
+            buf[0] = 0;
+        }
+    }
     if (buf[0]) lstrcpynW(g_gameDir, buf, MAX_PATH);
     else        lstrcpynW(g_gameDir, base, MAX_PATH);
     swprintf(g_instRoot, MAX_PATH, L"%s\\%s", g_gameDir, INST_SUBDIR);
@@ -154,6 +166,7 @@ static BOOL PrepareInstance(int idx, WCHAR *exeOut)
 {
     WCHAR dir[MAX_PATH], srcExe[MAX_PATH], dstExe[MAX_PATH];
     swprintf(dir, MAX_PATH, L"%s\\%02d", g_instRoot, idx);
+    CreateDirectoryW(g_instRoot, NULL);   // 先建父目录：CreateDirectory 只能建最后一层
     CreateDirectoryW(dir, NULL);
     swprintf(srcExe, MAX_PATH, L"%s\\%s", g_gameDir, EXE_NAME);
     swprintf(dstExe, MAX_PATH, L"%s\\%s", dir, EXE_NAME);
@@ -171,7 +184,11 @@ static BOOL PrepareInstance(int idx, WCHAR *exeOut)
                 need = FALSE;
         }
     }
-    if (need && !CopyFileW(srcExe, dstExe, FALSE)) return FALSE;
+    if (need && !CopyFileW(srcExe, dstExe, FALSE)) {
+        LogF(L"[开新号] 复制游戏 exe 失败（错误码 %d）：%s -> %s", GetLastError(), srcExe, dstExe);
+        LogF(L"[开新号] 错误码 2=源文件不存在(目录不对) 3=中间目录没建出来 5=被拦(杀软?) 32=目标被占用 80=目标已存在只读");
+        return FALSE;
+    }
     static const WCHAR *linkDirs[] = { L"font", L"img", L"inkImg", L"jre", L"resource", L"skin" };
     for (int i = 0; i < 6; i++) {
         WCHAR s[MAX_PATH], t[MAX_PATH];
@@ -263,6 +280,8 @@ static BOOL CALLBACK AdoptCb(HWND hwnd, LPARAM lp)
     c->found = hwnd;
     return TRUE;
 }
+static BOOL PidAlive(DWORD pid);   // 前置声明（FindInstWindow 用）
+
 static HWND FindInstWindow(int slot)
 {
     AdoptCtx c;
@@ -270,7 +289,9 @@ static HWND FindInstWindow(int slot)
     for (int i = 0; i < MAX_INST; i++)
         if (i != slot && g_inst[i].hwnd) c.skip[c.nSkip++] = g_inst[i].pid;
     EnumWindows(AdoptCb, (LPARAM)&c);
-    if (g_inst[slot].pid && c.found) {
+    // pid 匹配闸只在 pid 还活着时有意义：
+    // Jar2Exe 启动器会脱钩退出（pid 死了，JVM 才是游戏），此时不能拿死 pid 否决收编
+    if (g_inst[slot].pid && c.found && PidAlive(g_inst[slot].pid)) {
         DWORD pid = 0;
         GetWindowThreadProcessId(c.found, &pid);
         if (pid != g_inst[slot].pid) return NULL;
@@ -367,8 +388,19 @@ static void ActivateTab(int slot)
         t->state = ST_LAUNCH;
         LogF(L"[空槽] 发现未收编的游戏窗口 %p，收编到本页签。", h0);
     } else if (t->state == ST_DEAD) {
-        LaunchNew(slot);   // 掉线页签：点击 = 原槽位重开
-        return;
+        // 掉线页签：先看有没有未收编的游离游戏窗口——
+        // 启动器脱钩型游戏（pid 已死、窗口还活着）会被 PinLoop 误标灰，
+        // 此时点击应"收编"而不是"重开"（重开会多出一个新进程）
+        HWND h0 = FindInstWindow(slot);
+        if (h0) {
+            t->hwnd = h0;
+            GetWindowThreadProcessId(h0, &t->pid);
+            t->state = ST_LAUNCH;
+            LogF(L"[%s] 发现未收编的游戏窗口 %p，收编到本页签。", t->name, h0);
+        } else {
+            LaunchNew(slot);   // 真掉线：原槽位重开
+            return;
+        }
     }
     if (!t->hwnd || !IsWindow(t->hwnd)) {
         t->hwnd = FindInstWindow(slot);
@@ -443,8 +475,17 @@ static void PinLoop(void)
     for (int i = 0; i < MAX_INST; i++) {
         Inst *t = &g_inst[i];
         if (t->state == ST_LAUNCH && !t->attached && !PidAlive(t->pid)) {
-            LogF(L"[%s] 进程已退出（启动后未收编），页签转灰。", t->name);
-            t->state = ST_DEAD;
+            // pid 死 ≠ 游戏死：Jar2Exe 启动器脱钩退出后 JVM 还在跑。
+            // 先找游离的游戏窗口替 pid 收编，找不到才算真退。
+            HWND h0 = FindInstWindow(i);
+            if (h0) {
+                t->hwnd = h0;
+                GetWindowThreadProcessId(h0, &t->pid);
+                LogF(L"[%s] 启动器已退出，但发现游戏窗口 %p，已接手（点页签完成收编）。", t->name, h0);
+            } else {
+                LogF(L"[%s] 进程已退出（启动后未收编），页签转灰。", t->name);
+                t->state = ST_DEAD;
+            }
             InvalidateRect(g_frame, NULL, FALSE);
         }
     }
