@@ -14,3 +14,6 @@ _instances/
 *.lock6
 *.lock7
 *.lock8
+
+# 本地临时文件（纯文本复制用，不入库）
+docs/发布说明_复制用.txt
