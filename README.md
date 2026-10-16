@@ -73,7 +73,7 @@ AWT 内部缓存了窗口屏幕坐标，`SetParent` 后按缓存值自我修正�
 ### 7. 收编要用窗口属性做归属标记 🏷️
 
 ```c
-SetPropW(hwnd, L"YunHaiOwned", (HANDLE)hFrame);   // 值 = 收编者容器句柄
+SetPropW(hwnd, L"YunHaiTabOwned", (HANDLE)hFrame);   // 值 = 收编者容器句柄
 ```
 
 一处解决三个问题：防多实例重复收编同一个游戏 / 键盘钩子查出归属 / 快捷键三级路由判定。
